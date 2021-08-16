@@ -1,6 +1,5 @@
 \documentclass[12pt, letterpaper]{article}
 \usepackage[utf8]{inputenc}
-\usepackage{geometry}
 
 \usepackage[american]{babel}
 \usepackage{csquotes}
@@ -26,10 +25,10 @@
 \begin{abstract}
     PADLOCK is a cryptocurrency protocol that is designed to be decentralized,
     secure, and large throughput. It achieves this through sharded block
-    verification and UTXO set, a novel consensensus mechanism referred to as
-    "Proof of Staked Work", UTXO commitments, and UTXO expiry.  When all of this
-    is added together, it creates a cryptocurrency that is able to match, and
-    vastly exceed Visa capacity.
+    verification, a sharded UTXO set, a novel consensensus mechanism referred
+    to as "Proof of Staked Work", UTXO commitments, and UTXO expiry.  When all
+    of this is added together, it creates a cryptocurrency that is able to
+    match, and vastly exceed Visa capacity.
 \end{abstract}
 
 \section{Introduction}
@@ -41,15 +40,18 @@ as well, in order to ensure censorship-resistance, and egalitarian distribution
 of newly minted coins. However, this inversely proportional to scale. Scaling to
 a larger number of transactions puts a burden on mining and verifying nodes.
 This centralization opens the network to several attacks, such as the one
-describe by Vitalik Buterin \cite{LimitToBlockchainScaling}, where the nodes and
-major miners of a blockchain hard fork and mint new coins.  This paper attempts
-to demonstrate a protocol capable of scaling well remaining decentralized, and
-secure.
+described by Vitalik Buterin \cite{LimitToBlockchainScaling}, where the nodes
+and major miners of a blockchain hard fork and mint new coins, or large scale
+censorship.  This paper attempts to demonstrate a protocol capable of scaling
+well remaining decentralized, and secure.
 
 \section{Sharded Block Verfication}
 Sharded verification is achieved by having each node only verify a random
-portion of each block. If the portion they verify is invalid, they will submit a
-fraud proof to the network, and that block will be dropped.
+portion of each block. Each block will be split into 64 sections/shards. A node
+that is verifying a block will choose a portion of the sections (or one single
+section) to verify. With 1000 nodes and each of them verifying only one section,
+there will only be a block that doesn't get every section verified rougly
+0.001\% of the time.
 
 A fraud proof consists of data in that block that is invalid. Attached to the
 data must be various merkle proofs that proves the invalid data is actually
@@ -60,20 +62,22 @@ which is calculating fees owed to the miner. In order to calculate this, a node
 would have to add up the fee from every transaction in the block, thus requiring
 verification of the entire block to prove fraud.
 
-In order to fix this, there will be 256 sections of each block, and each section
-specifies the sum of the fees in each section. In order to prove that the total
-fee is wrong, only one 256th of the block needs to be revealed.
+In order to address this, there will be 256 sections of each block, and each
+section specifies the sum of the fees in each section. In order to prove that
+the total fee is wrong, only one 256th of the block needs to be revealed.
 
 \section{UTXO set sharding}
-The UTXO set will be split into 64 different shards. Each block will be split
-into 64 different equal sections, and each one will change a different UTXO
-shard. However, this leads to a problem; many of the transactions in each shard
-won't be apart of that nodes utxo set.
+The UTXO set will be split into 64 different shards. Each section of the block
+will change a different UTXO set shard. However, this leads to a problem; some
+transactions in each section will use inputs from different UTXO set shards than
+the verifying node holds.
 
 To solve this, the UTXO set will be stored as 64 separate UTreeXO \cite{UTreeXO}
 style accumulators. Each node will need to store the roots of every accumulator,
 which isn't likely to be over 500 bytes per accumulator. Every transaction input
-will need to contain a merkle proof to one of the accumulators.
+will need to contain a proof of inclusion to one of the accumulators. Nodes will
+then be free to choose which of the 64 accumulators they want to store the UTXOs
+from (if any).
 
 \subsection{Minimizing proof sizes}
 Proof sizes can be greatly reduced by merging merkle proofs. Each merkle proof
@@ -87,16 +91,49 @@ supplies the prover with the locations of various hashes in the merkle tree.
 Each transaction in the block \textbf{must} share at least 19 branches in the
 merkle tree, meaning that those 19 branches will only need to be stored once.
 This means every transaction except a few will be able to remove at least 19
-hashes from their proofs, resulting in only 16 hashes being needed. Using 28
-byte hashes, this adds an extra 448 bytes (assuming one input) per transactions,
-which is very manageable. This extra data is also in the right place.
-Transaction data isn't an ongoing cost, as old transaction data can be pruned
-without a loss in security, whereas the UTXO set is a permanent cost and cannot
-be pruned.
+hashes from their proofs, resulting in only 16 hashes being needed. Using 25
+byte hashes \footnotemark, this adds an extra 400 bytes per transaction
+(assuming one input), which is very manageable. This extra data is also in the
+right place.  Transaction data isn't an ongoing cost, as old transaction data
+can be pruned without a loss in security, whereas the UTXO set is a permanent
+cost and cannot be pruned.
+
+\footnotetext{25 byte hashes can be made secure, as described by the UTreeXO
+white paper\cite{UTreeXO}}
 
 \subsection{Verkle Tree Potential}
 Once the libraries and cryptography around verkle trees are more mature, merkle
 trees can be swapped for verkle trees, which would greatly reduce proof size.
+
+\section{Data Availability Proofs}
+The above described method of sharding has a vulnerability. An attacker could
+simply not publish one section of the block, and then have that section's
+accumulator contain a UTXO giving them unlimited coins, or remove someone else's
+coins. PADLOCK's security model is based on data being available to verify, so
+that a node can create a fraud proof if the data is invalid. But in this case,
+the data isn't available, so there is nothing to create fraud proofs from.
+
+In order to counter this, data availability proofs are used. The purpose of data
+availbility proofs are to prove that some data is available, without having to
+download all of the data. The prover will split the data into chunks, then
+perform erasure coding on the data . A merkle tree will then be formed from
+these chunks, and the merkle root will be.
+
+The verifier will select random chunks to download. The prover will provide
+those chunks, as well as the merkle branches to prove those chunks are apart of
+the data.
+
+Because erasure coding was performed, if the prover loses the data, or refuses
+to provide it, as long as all the verifiers have cumulatively downloaded at least ~64\% of the
+data, it can be reconstructed.
+
+A malicious block producer could still hide an invalid transaction by performing
+incorrect erasure coding. To counteract this, nodes which fully download a
+section of a block can provide a fraud proof, proving that the coding was done
+incorrectly. Using parity based erasure codes, these fraud proofs will only
+require a few chunks of the total data. The size of chunks can also be brought
+down depending on the amount of nodes, so erasure coding fraud proofs will
+likely take less than 10 kilobytes.
 
 \section{Sharded Block Production Isn't Needed}
 Sharded block production won't be required until PADLOCK is experiencing large
@@ -128,7 +165,7 @@ UTXOs will be unspendable after 3 months, and nodes won't have to store their
 proofs anymore. These UTXOs can be reintroduced by providing a merkle proof that
 they were apart of the UTXO set before it was pruned.
 
-\section{Fast Syncing}
+\section{Fast Syncing Via UTXO Commitments}
 Because the roots of the accumulators are stored in every block, a node can
 start syncing from any point in the blockchain, rather than syncing from the
 very beginning. This is secure assuming that the blockchain was valid up until
@@ -147,48 +184,47 @@ there isn't a need for constant energy expenditure like in proof of work.
 
 \subsection{Registration}
 To be registered as a block producer, you must mine a valid registration block.
-Registration blocks happen once every 50 blocks. A registration block doesn't
+Registration blocks happen once every 3 blocks. A registration block doesn't
 contain any actual transaction data, but rather just proofs of work.
 
 Many block producer candidates can pool together as well. They do this by having
 the registration block contain a list of all of their addresses, then a list of
 nonces, with the nonce producer's address appended to the nonce. This has a
-capacity for 50 nonces. The cumulative difficulty of every nonce is added, and
-must reach a certain threshold. The difficulty target is set to target 60 
-seconds. The mining algorithm is RandomX. RandomX is most efficiently mined on
-traditional CPUs, which makes it much easier for people to participate, as they
-don't need a good GPU, or ASIC.
+capacity for 20 nonces. The cumulative difficulty of every nonce is added, and
+must reach a certain threshold. The difficulty is set to target 20 seconds. The
+mining algorithm is RandomX. RandomX is most efficiently mined on traditional
+CPUs, which makes it much easier for people to participate, as they don't need a
+good GPU, or ASIC.
 
 Every registration block, existing block producers score will be reduced by
 0.1\%. This is done to incentivise existing block producers to try and mine new
 registration blocks.
 
 \subsection{Flow of Block Creation}
-First, a block producer is chosen via a verifiable delay function. This function
-is simply a proof of work on the previous block header. A nonce will be hashed
-with the previous block header. If the resulting hash doesn't meet the
-difficulty target, the nonce will be incremented and the process repeated until
-a valid hash is found. The difficulty target is designed to target 30 seconds.
-Once a valid hash is found, the last 8 bytes are represented as an unsigned 64
-bit integer. The next block producer is chosen by checking which block
-producer's range the hash is in.
+First, a block producer is chosen via a verifiable random function, using the
+most recent registration block as entropy. This is secure against stake
+grinding, as registration blocks are computationally hard to produce.
 
 The block producer will collect transactions from the mempool, and then add them
 to their block. The block producer will then have to complete a proof of work on
 their block to prevent spam. The difficulty of this proof of work adjusted every
-block to reach an average of 60 seconds per block. Once this is done, they
-broadcast their block, and the network starts the verifiable delay function to
-select the next block producer.
+block to reach an average of 10 minutes per block. Once this is done, they
+broadcast their block, and the network will then verify it. If a node detects
+the block as invalid, it will broadcast a fraud proof to the network, and the
+block will be dropped by all nodes and clients. This results in a 1 of N trust
+model for users, compared to the N/2 of N trust model from most consensus
+mechanisms.
 
-In the event the selected block producer is offline, then nodes will continue to
-increment the nonce in the verifiable delay function until a valid hash is
-found. That new hash will select the next block producer.
+Well solving the proof of work for their block, the block producer will
+broadcast any proofs of work they make that are difficult, but don't meet the
+difficulty target. This is done to prove to the rest of the network that they
+are online and working on their block.
 
 \subsection{Consensus}
 The valid blockchain is considered the \textit{heaviest} chain. Normal blocks
-will possess one weight unit. However, in the event where there was a second
+will possess 100 weight units. However, in the event where there was a second
 block producer selected, if the first block producer, does provide a block, the
-second block, and the following 5 after it, will be worth 0.8 weight units.
+second block, and the following 5 after it, will be worth 80 weight units.
 
 \subsection{Incentives}
 In order to incentivise being a block producer, they will periodically receive a
@@ -244,14 +280,15 @@ secure, nodes will want to validate multiple, or all, of the shards. However,
 with a large amount of validating nodes, it becomes increasingly likely that
 every shard in a block will be validated by one of the nodes, therefore making
 it secure to validate a lower number of shards. Ideally, nodes will only need to
-validate one shard. Assuming similar performance to Bitcoin ABC (which is
-likely, considering it is based on Bitcoin Core which doesn't have very much
-parallelization, as well as less database requests because of UTreeXO), at 100\%
-load, a typical 4 core desktop can handle at least 3000 transactions per second.
-In order to make syncing quick, no more than 10\% of the processing power should
-be used to validate blocks. This would allow one node to process 300
-transactions per second. With 64 shards, that's 19200 transactions per second.
-However, before that point, sharded block production should be implemented.
+validate one shard. Assuming similar performance to Bitcoin ABC (PADLOCK will
+likely perform better, as ABC is based on Bitcoin Core, which doesn't have
+parralelization, runs on decade old code, and uses a bulky scripting language),
+at 100\% load, a typical 4 core desktop can handle at least 3000 transactions
+per second.  In order to make syncing quick, no more than 10\% of the processing
+power should be used to validate blocks. This would allow one node to process
+3000 transactions per second (see section 4). With 64 shards, that's 19200
+transactions per second.  However, before that point, sharded block production
+should be implemented.
 
 \section{Adaptive Block Size Cap}
 There will be a cap on block size in order to prevent spam attacks. However,
